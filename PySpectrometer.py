@@ -4,313 +4,323 @@ import base64
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-from specFunctions import wavelength_to_rgb,savitzky_golay,peakIndexes,readcal,writecal,background,generateGraticule
+from specFunctions import wavelength_to_rgb, savitzky_golay, peakIndexes, readcal, writecal, background, \
+    generateGraticule
 from func_utils import *
-from IV import * 
+from IV import *
 import threading
 from multiprocessing import Process
 
-def handle_mouse(event,x,y,flags,param):
-	global clickArray
-	global cursorX
-	global cursorY
-	mouseYOffset = 160
-	if event == cv2.EVENT_MOUSEMOVE:
-		cursorX = x
-		cursorY = y	
-	if event == cv2.EVENT_LBUTTONDOWN:
-		mouseX = x
-		mouseY = y-mouseYOffset
-		clickArray.append([mouseX,mouseY])
-""" 
-serialConnection = connect_serial()
-realTimePlot = AnimationPlot(serialConnection) 
-p = Process(target=realTimePlot.run)
-p.start()
-p.join() """
 
 class PySpectrometer:
-	def __init__(self) -> None:
-		self.video_window_title = "Spectrograph"
-		self.frameWidth = 800
-		self.frameHeight = 600
-		self.font=cv2.FONT_HERSHEY_SIMPLEX
+    def __init__(self):
+        self.hold_msg = None
+        self.data = None
+        self.cols = None
+        self.rows = None
+        self.cropped = None
+        self.bw_image = None
+        self.frame = None
+        self.ret = None
+        self.mouseY = None
+        self.mouseX = None
+        self.cal_complete = None
+        self.save_data = None
+        self.graph_data = None
+        self.keyPress = None
+        self.video_window_title = "Spectrograph"
+        self.frameWidth = 800
+        self.frameHeight = 600
+        self.font = cv2.FONT_HERSHEY_SIMPLEX
 
-		self.calibrate = False
-		self.holdpeaks = False #are we holding peaks?
-		self.measure = False #are we measuring?
-		self.recPixels = False #are we measuring pixels and recording clicks?
+        self.calibrate = False
+        self.hold_peaks = False  # are we holding peaks?
+        self.measure = False  # are we measuring?
+        self.recPixels = False  # are we measuring pixels and recording clicks?
 
-		#settings for peak detect
-		self.savpoly = 7 #savgol filter polynomial max val 15
-		self.mindist = 50 #minumum distance between peaks max val 100
-		self.thresh = 20 #Threshold max val 100
+        # settings for peak detect
+        self.sav_poly = 7  # savgol filter polynomial max val 15
+        self.min_dist = 50  # minimum distance between peaks max val 100
+        self.thresh = 20  # Threshold max val 100
 
-		self.clickArray = [] 
-		self.cursorX = 0
-		self.cursorY = 0
-		#listen for click on plot window
+        self.clickArray = []
+        self.cursorX = 0
+        self.cursorY = 0
+        # listen for click on plot window
 
+        self.intensity = [0] * self.frameWidth  # array for intensity data...full of zeroes
 
-		self.intensity = [0] * self.frameWidth #array for intensity data...full of zeroes
+        self.display_fullscreen, self.dev, self.fps = command_line_argument()
+        self.cap, self.c_fps = init_video(self.dev, self.display_fullscreen, self.video_window_title, self.frameWidth,
+                                          self.frameHeight, self.fps)
+        cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
 
+        # messages
+        self.msg1 = ""
+        self.saveMsg = "No data saved"
 
+        # Go grab the computed calibration data
+        self.cal_data = readcal(self.frameWidth)
+        self.wavelengthData = self.cal_data[0]
+        self.cal_msg1 = self.cal_data[1]
+        self.cal_msg2 = self.cal_data[2]
+        self.cal_msg3 = self.cal_data[3]
 
-		self.dispFullscreen, self.dev, self.fps = command_line_argument()
-		self.cap, self.cfps = init_video(self.dev, self.dispFullscreen, self.video_window_title, self.frameWidth, self.frameHeight, self.fps)
-		cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
+        # generate the graticule data
+        self.graticuleData = generateGraticule(self.wavelengthData)
+        tens = (self.graticuleData[0])
+        fifties = (self.graticuleData[1])
 
-		#messages
-		self.msg1 = ""
-		self.saveMsg = "No data saved"
+        # blank image for Graph
+        self.graph = np.zeros([320, self.frameWidth, 3], dtype=np.uint8)
+        self.graph.fill(255)  # fill white
 
-		#Go grab the computed calibration data
-		self.caldata = readcal(self.frameWidth)
-		self.wavelengthData = self.caldata[0]
-		self.calmsg1 = self.caldata[1]
-		self.calmsg2 = self.caldata[2]
-		self.calmsg3 = self.caldata[3]
+    def handle_keypress(self):
+        self.keyPress = cv2.waitKey(1)
+        match self.keyPress:
+            case ord('q'):
+                exit()
+            case ord('h'):
+                if not self.hold_peaks:
+                    self.hold_peaks = True
+                elif self.hold_peaks:
+                    self.hold_peaks = False
+            case ord("s"):
+                # package up the data!
+                self.graph_data = [self.wavelengthData, self.intensity]
+                self.save_data = [self.spectrum_vertical, self.graph_data]
+                self.saveMsg = snapshot(self.save_data)
+            case ord("c"):
+                self.cal_complete = writecal(self.clickArray)
+                if self.cal_complete:
+                    # overwrite wavelength data
+                    # Go grab the computed calibration data
+                    self.cal_data = readcal(self.frameWidth)
+                    self.wavelengthData = self.cal_data[0]
+                    self.cal_msg1 = self.cal_data[1]
+                    self.cal_msg2 = self.cal_data[2]
+                    self.cal_msg3 = self.cal_data[3]
+                    # overwrite graticule data
+                    self.graticuleData = generateGraticule(self.wavelengthData)
+                    tens = (self.graticuleData[0])
+                    fifties = (self.graticuleData[1])
+            case ord("x"):
+                self.clickArray = []
+            case ord("m"):
+                self.recPixels = False  # turn off rec_pixels!
+                if not self.measure:
+                    self.measure = True
+                elif self.measure:
+                    self.measure = False
+            case ord("p"):
+                self.measure = False  # turn off measure!
+                if not self.recPixels:
+                    self.recPixels = True
+                elif self.recPixels:
+                    self.recPixels = False
+            case ord("o"):  # sav up
+                self.sav_poly += 1
+                if self.sav_poly >= 15:
+                    self.sav_poly = 15
+            case ord("l"):  # sav down
+                self.sav_poly -= 1
+                if self.sav_poly <= 0:
+                    self.sav_poly = 0
+            case ord("i"):  # Peak width up
+                self.min_dist += 1
+                if self.min_dist >= 100:
+                    self.min_dist = 100
+            case ord("k"):  # Peak Width down
+                self.min_dist -= 1
+                if self.min_dist <= 0:
+                    self.min_dist = 0
+            case ord("u"):  # label thresh up
+                self.thresh += 1
+                if self.thresh >= 100:
+                    self.thresh = 100
+            case ord("j"):  # label thresh down
+                self.thresh -= 1
+                if self.thresh <= 0:
+                    self.thresh = 0
+            case _:
+                exit()
 
-		#generate the craticule data
-		self.graticuleData = generateGraticule(self.wavelengthData)
-		tens = (self.graticuleData[0])
-		fifties = (self.graticuleData[1])
+    def handle_mouse(self, event, x, y, flags, param):
+        mouseYOffset = 160
+        if event == cv2.EVENT_MOUSEMOVE:
+            self.cursorX = x
+            self.cursorY = y
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.mouseX = x
+            self.mouseY = y - mouseYOffset
+            self.clickArray.append([self.mouseX, self.mouseY])
 
+    def display_graticule_line(self):
+        # Display a graticule calibrated with cal data
+        text_offset = 12
+        # vertical lines every whole 10nm
+        for position in self.tens:
+            cv2.line(self.graph, (position, 15), (position, 320), (200, 200, 200), 1)
 
-while(self.cap.isOpened()):
-	# Capture frame-by-frame
-	ret, frame = cap.read()
-	#cv2.imshow("Original Image", frame)
-	#cv2.line(frame, (0, 300), (800, 300), (0, 255, 0))
-	frame = rotate(frame, -40)
-	#cv2.imshow("Rotated Image", frame)
-	if ret == True:
-		y=int((frameHeight/2)-40) #origin of the vertical crop
-		y=50	#origin of the vert crop
-		x=0   	#origin of the horiz crop
-		h=100 	#height of the crop
-		w=frameWidth 	#width of the crop
-		cropped = frame[y:y+h, x:x+w]
-		#cv2.imshow("Cropped_Image", cropped)
-		bwimage = cv2.cvtColor(cropped,cv2.COLOR_BGR2GRAY)
-		rows,cols = bwimage.shape
-		halfway =int(rows/2)
-		#show our line on the original image
-		#now a 3px wide region
-		cv2.line(cropped,(0,halfway-2),(frameWidth,halfway-2),(255, 255,255),1)
-		cv2.line(cropped,(0,halfway+2),(frameWidth,halfway+2),(255,255,255),1)
+        # vertical lines every whole 50nm
+        for position_data in self.fifties:
+            cv2.line(self.graph, (position_data[0], 15), (position_data[0], 320), (0, 0, 0), 1)
+            cv2.putText(self.graph, str(position_data[1]) + 'nm', (position_data[0] - text_offset, 12), self.font, 0.4,
+                        (0, 0, 0), 1, cv2.LINE_AA)
 
-		#banner image
-		decoded_data = base64.b64decode(background)
-		np_data = np.frombuffer(decoded_data,np.uint8)
-		img = cv2.imdecode(np_data,3)
-		messages = img
+        # horizontal lines
+        for i in range(320):
+            if i >= 64:
+                if i % 64 == 0:  # suppress the first line then draw the rest...
+                    cv2.line(self.graph, (0, i), (self.frameWidth, i), (100, 100, 100), 1)
 
-		#blank image for Graph
-		graph = np.zeros([320,frameWidth,3],dtype=np.uint8)
-		graph.fill(255) #fill white
+    def process_plot_intensity(self, halfway):
+        # Now process the intensity data and display it
+        # intensity = []
+        for i in range(self.cols):
+            # data = bwimage[halfway,i] #pull the pixel data from the halfway mark
+            # print(type(data)) #numpy.uint8
+            # average the data of 3 rows of pixels:
+            data_minus_1 = self.bw_image[halfway - 1, i]
+            data_zero = self.bw_image[halfway, i]  # pull the pixel data from the halfway mark
+            data_plus_1 = self.bw_image[halfway + 1, i]
+            self.data = (int(data_minus_1) + int(data_zero) + int(data_plus_1)) / 3
+            self.data = np.uint8(self.data)
 
-		#Display a graticule calibrated with cal data
-		textoffset = 12
-		#vertial lines every whole 10nm
-		for position in tens:
-			cv2.line(graph,(position,15),(position,320),(200,200,200),1)
+            if self.hold_peaks:
+                if self.data > intensity[i]:
+                    self.intensity[i] = self.data
+            else:
+                self.intensity[i] = self.data
 
-		#vertical lines every whole 50nm
-		for positiondata in fifties:
-			cv2.line(graph,(positiondata[0],15),(positiondata[0],320),(0,0,0),1)
-			cv2.putText(graph,str(positiondata[1])+'nm',(positiondata[0]-textoffset,12),font,0.4,(0,0,0),1, cv2.LINE_AA)
+        # Draw the intensity data :-)
+        # first filter if not holding peaks!
+        if not self.hold_peaks:
+            self.intensity = savitzky_golay(self.intensity, 17, self.sav_poly)
+            self.intensity = np.array(self.intensity)
+            self.intensity = self.intensity.astype(int)
+            self.hold_msg = "Hold-peaks OFF"
+        else:
+            self.hold_msg = "Hold-peaks ON"
 
-		#horizontal lines
-		for i in range (320):
-			if i>=64:
-				if i%64==0: #suppress the first line then draw the rest...
-					cv2.line(graph,(0,i),(frameWidth,i),(100,100,100),1)
-		
-		#Now process the intensity data and display it
-		#intensity = []
-		for i in range(cols):
-			#data = bwimage[halfway,i] #pull the pixel data from the halfway mark	
-			#print(type(data)) #numpy.uint8
-			#average the data of 3 rows of pixels:
-			dataminus1 = bwimage[halfway-1,i]
-			datazero = bwimage[halfway,i] #pull the pixel data from the halfway mark
-			dataplus1 = bwimage[halfway+1,i]
-			data = (int(dataminus1)+int(datazero)+int(dataplus1))/3
-			data = np.uint8(data)
-					
-			
-			if holdpeaks == True:
-				if data > intensity[i]:
-					intensity[i] = data
-			else:
-				intensity[i] = data
+        # now draw the intensity data....
+        index = 0
+        for i in intensity:
+            # derive the color from the  wavelengthData array
+            rgb = wavelength_to_rgb(round(self.wavelengthData[index]))
+            r, g, b = rgb[0], rgb[1], rgb[2]
+            # or some reason origin is top left.
+            cv2.line(self.graph, (index, 320), (index, 320 - i), (b, g, r), 1)
+            cv2.line(self.graph, (index, 319 - i), (index, 320 - i), (0, 0, 0), 1, cv2.LINE_AA)
+            index += 1
 
+    def find_label_peaks(self):
+        # find peaks and label them
+        text_offset = 12
+        self.thresh = int(self.thresh)  # make sure the data is int.
+        indexes = peakIndexes(intensity, thres=self.thresh / max(intensity), min_dist=self.min_dist)
+        # print(indexes)
+        for i in indexes:
+            height = self.intensity[i]
+            height = 310 - height
+            wavelength = round(self.wavelengthData[i], 1)
+            cv2.rectangle(self.graph, ((i - text_offset) - 2, height), ((i - text_offset) + 60, height - 15),
+                          (0, 255, 255),
+                          -1)
+            cv2.rectangle(self.graph, ((i - text_offset) - 2, height), ((i - text_offset) + 60, height - 15),
+                          (0, 0, 0), 1)
+            cv2.putText(self.graph, str(wavelength) + 'nm', (i - text_offset, height - 3), self.font, 0.4, (0, 0, 0), 1,
+                        cv2.LINE_AA)
+            # flagpoles
+            cv2.line(self.graph, (i, height), (i, height + 10), (0, 0, 0), 1)
 
-
-		#Draw the intensity data :-)
-		#first filter if not holding peaks!
-		
-		if holdpeaks == False:
-			intensity = savitzky_golay(intensity,17,savpoly)
-			intensity = np.array(intensity)
-			intensity = intensity.astype(int)
-			holdmsg = "Holdpeaks OFF" 
-		else:
-			holdmsg = "Holdpeaks ON"
-			
-		
-		#now draw the intensity data....
-		index=0
-		for i in intensity:
-			rgb = wavelength_to_rgb(round(wavelengthData[index]))#derive the color from the wvalenthData array
-			r = rgb[0]
-			g = rgb[1]
-			b = rgb[2]
-			#or some reason origin is top left.
-			cv2.line(graph, (index,320), (index,320-i), (b,g,r), 1)
-			cv2.line(graph, (index,319-i), (index,320-i), (0,0,0), 1,cv2.LINE_AA)
-			index+=1
-
-
-		#find peaks and label them
-		textoffset = 12
-		thresh = int(thresh) #make sure the data is int.
-		indexes = peakIndexes(intensity, thres=thresh/max(intensity), min_dist=mindist)
-		#print(indexes)
-		for i in indexes:
-			height = intensity[i]
-			height = 310-height
-			wavelength = round(wavelengthData[i],1)
-			cv2.rectangle(graph,((i-textoffset)-2,height),((i-textoffset)+60,height-15),(0,255,255),-1)
-			cv2.rectangle(graph,((i-textoffset)-2,height),((i-textoffset)+60,height-15),(0,0,0),1)
-			cv2.putText(graph,str(wavelength)+'nm',(i-textoffset,height-3),font,0.4,(0,0,0),1, cv2.LINE_AA)
-			#flagpoles
-			cv2.line(graph,(i,height),(i,height+10),(0,0,0),1)
-
-
-		if measure == True:
-			#show the cursor!
-			cv2.line(graph,(cursorX,cursorY-140),(cursorX,cursorY-180),(0,0,0),1)
-			cv2.line(graph,(cursorX-20,cursorY-160),(cursorX+20,cursorY-160),(0,0,0),1)
-			cv2.putText(graph,str(round(wavelengthData[cursorX],2))+'nm',(cursorX+5,cursorY-165),font,0.4,(0,0,0),1, cv2.LINE_AA)
-
-		if recPixels == True:
-			#display the points
-			cv2.line(graph,(cursorX,cursorY-140),(cursorX,cursorY-180),(0,0,0),1)
-			cv2.line(graph,(cursorX-20,cursorY-160),(cursorX+20,cursorY-160),(0,0,0),1)
-			cv2.putText(graph,str(cursorX)+'px',(cursorX+5,cursorY-165),font,0.4,(0,0,0),1, cv2.LINE_AA)
-		else:
-			#also make sure the click array stays empty
-			clickArray = []
-
-		if clickArray:
-			for data in clickArray:
-				mouseX=data[0]
-				mouseY=data[1]
-				cv2.circle(graph,(mouseX,mouseY),5,(0,0,0),-1)
-				#we can display text :-) so we can work out wavelength from x-pos and display it ultimately
-				cv2.putText(graph,str(mouseX),(mouseX+5,mouseY),cv2.FONT_HERSHEY_SIMPLEX,0.4,(0,0,0))
-		
-
-	
-
-		#stack the images and display the spectrum	
-		spectrum_vertical = np.vstack((messages,cropped, graph))
-		#dividing lines...
-		cv2.line(spectrum_vertical,(0,80),(frameWidth,80),(255,255,255),1)
-		cv2.line(spectrum_vertical,(0,160),(frameWidth,160),(255,255,255),1)
-		#print the messages
-		cv2.putText(spectrum_vertical,calmsg1,(490,15),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,calmsg3,(490,33),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,"Framerate: "+str(cfps),(490,51),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,saveMsg,(490,69),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		#Second column
-		cv2.putText(spectrum_vertical,holdmsg,(640,15),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,"Savgol Filter: "+str(savpoly),(640,33),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,"Label Peak Width: "+str(mindist),(640,51),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.putText(spectrum_vertical,"Label Threshold: "+str(thresh),(640,69),font,0.4,(0,255,255),1, cv2.LINE_AA)
-		cv2.imshow(video_window_title,spectrum_vertical)
-
-
-		keyPress = cv2.waitKey(1)
-		if keyPress == ord('q'):
-			break
-		elif keyPress == ord('h'):
-			if holdpeaks == False:
-				holdpeaks = True
-			elif holdpeaks == True:
-				holdpeaks = False
-		elif keyPress == ord("s"):
-			#package up the data!
-			graphdata = []
-			graphdata.append(wavelengthData)
-			graphdata.append(intensity)
-			savedata = []
-			savedata.append(spectrum_vertical)
-			savedata.append(graphdata)
-			saveMsg = snapshot(savedata)
-		elif keyPress == ord("c"):
-			calcomplete = writecal(clickArray)
-			if calcomplete:
-				#overwrite wavelength data
-				#Go grab the computed calibration data
-				caldata = readcal(frameWidth)
-				wavelengthData = caldata[0]
-				calmsg1 = caldata[1]
-				calmsg2 = caldata[2]
-				calmsg3 = caldata[3]
-				#overwrite graticule data
-				graticuleData = generateGraticule(wavelengthData)
-				tens = (graticuleData[0])
-				fifties = (graticuleData[1])
-		elif keyPress == ord("x"):
-			clickArray = []
-		elif keyPress == ord("m"):
-			recPixels = False #turn off recpixels!
-			if measure == False:
-				measure = True
-			elif measure == True:
-				measure = False
-		elif keyPress == ord("p"):
-			measure = False #turn off measure!
-			if recPixels == False:
-				recPixels = True
-			elif recPixels == True:
-				recPixels = False
-		elif keyPress == ord("o"):#sav up
-				savpoly+=1
-				if savpoly >=15:
-					savpoly=15
-		elif keyPress == ord("l"):#sav down
-				savpoly-=1
-				if savpoly <=0:
-					savpoly=0
-		elif keyPress == ord("i"):#Peak width up
-				mindist+=1
-				if mindist >=100:
-					mindist=100
-		elif keyPress == ord("k"):#Peak Width down
-				mindist-=1
-				if mindist <=0:
-					mindist=0
-		elif keyPress == ord("u"):#label thresh up
-				thresh+=1
-				if thresh >=100:
-					thresh=100
-		elif keyPress == ord("j"):#label thresh down
-				thresh-=1
-				if thresh <=0:
-					thresh=0
-	else: 
-		break
+    def display(self, messages):
+        # stack the images and display the spectrum
+        spectrum_vertical = np.vstack((messages, self.cropped, self.graph))
+        # dividing lines...
+        cv2.line(spectrum_vertical, (0, 80), (self.frameWidth, 80), (255, 255, 255), 1)
+        cv2.line(spectrum_vertical, (0, 160), (self.frameWidth, 160), (255, 255, 255), 1)
+        # print the messages
+        cv2.putText(spectrum_vertical, self.cal_msg1, (490, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, self.cal_msg3, (490, 33), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, "Framerate: " + str(self.c_fps), (490, 51), self.font, 0.4, (0, 255, 255), 1,
+                    cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, self.saveMsg, (490, 69), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        # Second column
+        cv2.putText(spectrum_vertical, self.hold_msg, (640, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, "Savgol Filter: " + str(self.sav_poly), (640, 33), self.font, 0.4,
+                    (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, "Label Peak Width: " + str(self.min_dist), (640, 51), self.font, 0.4,
+                    (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(spectrum_vertical, "Label Threshold: " + str(self.thresh), (640, 69), self.font, 0.4,
+                    (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.imshow(self.video_window_title, spectrum_vertical)
 
 
 
+    def run(self):
+        while self.cap.isOpened():
+            # Capture frame-by-frame
+            self.ret, self.frame = self.cap.read()
+            # cv2.imshow("Original Image", frame)
+            # cv2.line(frame, (0, 300), (800, 300), (0, 255, 0))
+            self.frame = rotate(self.frame, -40)
+            # cv2.imshow("Rotated Image", frame)
+            if self.ret:
+                y = int((self.frameHeight / 2) - 40)  # origin of the vertical crop
+                y = 50  # origin of the vert crop
+                x = 0  # origin of the horiz crop
+                h = 100  # height of the crop
+                w = self.frameWidth  # width of the crop
+                self.cropped = self.frame[y:y + h, x:x + w]
+                # cv2.imshow("Cropped_Image", cropped)
+                self.bw_image = cv2.cvtColor(self.cropped, cv2.COLOR_BGR2GRAY)
+                self.rows, self.cols = self.bw_image.shape
+                halfway = int(self.rows / 2)
+                # show our line on the original image
+                # now a 3px wide region
+                cv2.line(self.cropped, (0, halfway - 2), (self.frameWidth, halfway - 2), (255, 255, 255), 1)
+                cv2.line(self.cropped, (0, halfway + 2), (self.frameWidth, halfway + 2), (255, 255, 255), 1)
 
-realTimePlot.run()     
-#Everything done, release the vid
-cap.release()
-cv2.destroyAllWindows()
+                # banner image
+                decoded_data = base64.b64decode(background)
+                np_data = np.frombuffer(decoded_data, np.uint8)
+                img = cv2.imdecode(np_data, 3)
+                messages = img
+
+                if self.measure:
+                    # show the cursor!
+                    cv2.line(self.graph, (self.cursorX, self.cursorY - 140),
+                             (self.cursorX, self.cursorY - 180), (0, 0, 0), 1)
+                    cv2.line(self.graph, (self.cursorX - 20, self.cursorY - 160),
+                             (self.cursorX + 20, self.cursorY - 160), (0, 0, 0), 1)
+                    cv2.putText(self.graph, str(round(self.wavelengthData[self.cursorX], 2)) + 'nm', (self.cursorX + 5,
+                                                                                                      self.cursorY - 165),
+                                self.font, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+
+                if self.recPixels:
+                    # display the points
+                    cv2.line(self.graph, (self.cursorX, self.cursorY - 140),
+                             (self.cursorX, self.cursorY - 180), (0, 0, 0), 1)
+                    cv2.line(self.graph, (self.cursorX - 20, self.cursorY - 160),
+                             (self.cursorX + 20, self.cursorY - 160), (0, 0, 0), 1)
+                    cv2.putText(self.graph, str(self.cursorX) + 'px', (self.cursorX + 5, self.cursorY - 165), self.font,
+                                0.4, (0, 0, 0), 1, cv2.LINE_AA)
+                else:
+                    # also make sure the click array stays empty
+                    clickArray = []
+
+                if clickArray:
+                    for data in clickArray:
+                        mouseX = self.data[0]
+                        mouseY = self.data[1]
+                        cv2.circle(self.graph, (mouseX, mouseY), 5, (0, 0, 0), -1)
+                        # we can display text :-) so we can work out wavelength from x-pos and display it ultimately
+                        cv2.putText(self.graph, str(mouseX), (mouseX + 5, mouseY), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                                    (0, 0, 0))
 
 
+    def quit_program(self):
+        # Everything done, release the vid
+        self.cap.release()
+        cv2.destroyAllWindows()
