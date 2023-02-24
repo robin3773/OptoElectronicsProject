@@ -6,7 +6,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from specFunctions import wavelength_to_rgb,savitzky_golay,peakIndexes,readcal,writecal,background,generateGraticule
 from func_utils import *
-
+from IV import * 
+import threading
+from multiprocessing import Process
 
 def handle_mouse(event,x,y,flags,param):
 	global clickArray
@@ -20,54 +22,62 @@ def handle_mouse(event,x,y,flags,param):
 		mouseX = x
 		mouseY = y-mouseYOffset
 		clickArray.append([mouseX,mouseY])
+""" 
+serialConnection = connect_serial()
+realTimePlot = AnimationPlot(serialConnection) 
+p = Process(target=realTimePlot.run)
+p.start()
+p.join() """
 
-video_window_title = "Spectrograph"
-frameWidth = 800
-frameHeight = 600
-font=cv2.FONT_HERSHEY_SIMPLEX
+class PySpectrometer:
+	def __init__(self) -> None:
+		self.video_window_title = "Spectrograph"
+		self.frameWidth = 800
+		self.frameHeight = 600
+		self.font=cv2.FONT_HERSHEY_SIMPLEX
 
-calibrate = False
-holdpeaks = False #are we holding peaks?
-measure = False #are we measuring?
-recPixels = False #are we measuring pixels and recording clicks?
+		self.calibrate = False
+		self.holdpeaks = False #are we holding peaks?
+		self.measure = False #are we measuring?
+		self.recPixels = False #are we measuring pixels and recording clicks?
 
-#settings for peak detect
-savpoly = 7 #savgol filter polynomial max val 15
-mindist = 50 #minumum distance between peaks max val 100
-thresh = 20 #Threshold max val 100
+		#settings for peak detect
+		self.savpoly = 7 #savgol filter polynomial max val 15
+		self.mindist = 50 #minumum distance between peaks max val 100
+		self.thresh = 20 #Threshold max val 100
 
-clickArray = [] 
-cursorX = 0
-cursorY = 0
-#listen for click on plot window
-
-
-intensity = [0] * frameWidth #array for intensity data...full of zeroes
-
-
-
-dispFullscreen, dev, fps = command_line_argument()
-cap, cfps = init_video(dev, dispFullscreen, video_window_title, frameWidth, frameHeight, fps)
-cv2.setMouseCallback(video_window_title,handle_mouse)
-
-#messages
-msg1 = ""
-saveMsg = "No data saved"
-
-#Go grab the computed calibration data
-caldata = readcal(frameWidth)
-wavelengthData = caldata[0]
-calmsg1 = caldata[1]
-calmsg2 = caldata[2]
-calmsg3 = caldata[3]
-
-#generate the craticule data
-graticuleData = generateGraticule(wavelengthData)
-tens = (graticuleData[0])
-fifties = (graticuleData[1])
+		self.clickArray = [] 
+		self.cursorX = 0
+		self.cursorY = 0
+		#listen for click on plot window
 
 
-while(cap.isOpened()):
+		self.intensity = [0] * self.frameWidth #array for intensity data...full of zeroes
+
+
+
+		self.dispFullscreen, self.dev, self.fps = command_line_argument()
+		self.cap, self.cfps = init_video(self.dev, self.dispFullscreen, self.video_window_title, self.frameWidth, self.frameHeight, self.fps)
+		cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
+
+		#messages
+		self.msg1 = ""
+		self.saveMsg = "No data saved"
+
+		#Go grab the computed calibration data
+		self.caldata = readcal(self.frameWidth)
+		self.wavelengthData = self.caldata[0]
+		self.calmsg1 = self.caldata[1]
+		self.calmsg2 = self.caldata[2]
+		self.calmsg3 = self.caldata[3]
+
+		#generate the craticule data
+		self.graticuleData = generateGraticule(self.wavelengthData)
+		tens = (self.graticuleData[0])
+		fifties = (self.graticuleData[1])
+
+
+while(self.cap.isOpened()):
 	# Capture frame-by-frame
 	ret, frame = cap.read()
 	#cv2.imshow("Original Image", frame)
@@ -297,9 +307,10 @@ while(cap.isOpened()):
 
 
 
+
+realTimePlot.run()     
 #Everything done, release the vid
 cap.release()
-
 cv2.destroyAllWindows()
 
 

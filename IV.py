@@ -13,7 +13,7 @@ class AnimationPlot:
         self.led_current = []
         self.led_voltage = []
         self.luminous_intensity = []
-        self.fig = plt.figure(num=1, figsize=(10, 10))
+        self.fig = plt.figure(num=1, figsize=(10, 10), tight_layout= True)
         self.ax1 = self.fig.add_subplot(211)
         self.ax2 = self.fig.add_subplot(212)
         self.serial_connection = serial_connection
@@ -35,16 +35,15 @@ class AnimationPlot:
             warnings.warn("Corrupted Data Received")                 
             pass   
 
-        self.led_current = self.led_current[-500:]    
-        self.led_voltage = self.led_voltage[-500:]       
+        self.led_current = self.led_current[-50:]    
+        self.led_voltage = self.led_voltage[-50:]       
 
-        
         
     def animate(self, i):   
         self.extract_serial_data()        
         self.getPlotFormat()
-        self.ax1.plot(self.led_voltage, self.led_current, color = 'm', linewidth = 1)   
-        self.ax2.plot(self.led_current, self.luminous_intensity, color = 'c')                    
+        self.ax1.plot(self.led_voltage, self.led_current, color = 'm', linewidth = 2)   
+        #self.ax2.plot(self.led_current, self.luminous_intensity, color = 'c')                    
         
 
     def getPlotFormat(self):
@@ -69,11 +68,12 @@ class AnimationPlot:
         print("I = ", self.led_current)
 
     def run(self):
-        ani = animation.FuncAnimation(self.fig, realTimePlot.animate, frames=10000, interval=10, blit = True) 
+        ani = animation.FuncAnimation(self.fig, self.animate, frames=10000, interval=10, blit = True) 
         plt.show()   
 
-intensity = 1;
-serialConnection = connect_serial()
-realTimePlot = AnimationPlot(serialConnection) 
-realTimePlot.run()                                           
-                                
+                                      
+if __name__ == "__main__":
+    intensity = 1;
+    serialConnection = connect_serial()
+    realTimePlot = AnimationPlot(serialConnection) 
+    realTimePlot.run() 
