@@ -2,6 +2,17 @@ import cv2
 import argparse
 import time
 import numpy as np
+import serial
+
+def connect_serial(serialBaud= 9600, serialPort = '/dev/ttyACM0'):
+    print('Trying to connect to: ' + str(serialPort) + ' at ' + str(serialBaud) + ' BAUD.')
+    try:
+        serialConnection = serial.Serial(serialPort, serialBaud, timeout=6)
+        print('Connected to ' + str(serialPort) + ' at ' + str(serialBaud) + ' BAUD.')
+        return serialConnection
+    except:
+        print("Failed to connect with " + str(serialPort) + ' at ' + str(serialBaud) + ' BAUD.')
+        return None
 
 def rotate(image, angle):
 	image_center = tuple(np.array(image.shape[1::-1]) / 2)
