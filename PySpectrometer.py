@@ -76,9 +76,9 @@ while(cap.isOpened()):
 	#cv2.imshow("Rotated Image", frame)
 	if ret == True:
 		y=int((frameHeight/2)-40) #origin of the vertical crop
-		y=180	#origin of the vert crop
+		y=50	#origin of the vert crop
 		x=0   	#origin of the horiz crop
-		h=200 	#height of the crop
+		h=100 	#height of the crop
 		w=frameWidth 	#width of the crop
 		cropped = frame[y:y+h, x:x+w]
 		#cv2.imshow("Cropped_Image", cropped)
