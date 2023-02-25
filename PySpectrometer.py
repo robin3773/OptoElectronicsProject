@@ -10,10 +10,24 @@ from func_utils import *
 from IV import *
 import threading
 from multiprocessing import Process
-
+from IV import AnimationPlot
 
 class PySpectrometer:
-    def __init__(self):
+    def __init__(self, device_id, fps, display_fullscreen):
+        self.spectrum_vertical = None
+        self.fifties = None
+        self.graticuleData = None
+        self.cal_msg3 = None
+        self.cal_msg2 = None
+        self.cal_msg1 = None
+        self.wavelengthData = None
+        self.cal_data = None
+        self.c_fps = None
+        self.fps = fps
+        self.dev = device_id
+        self.cap = None
+        self.tens = None
+        self.display_fullscreen = display_fullscreen
         self.hold_msg = None
         self.data = None
         self.cols = None
@@ -50,15 +64,15 @@ class PySpectrometer:
 
         self.intensity = [0] * self.frameWidth  # array for intensity data...full of zeroes
 
-        self.display_fullscreen, self.dev, self.fps = command_line_argument()
-        self.cap, self.c_fps = init_video(self.dev, self.display_fullscreen, self.video_window_title, self.frameWidth,
-                                          self.frameHeight, self.fps)
-        cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
-
         # messages
         self.msg1 = ""
         self.saveMsg = "No data saved"
 
+        # blank image for Graph
+        self.graph = np.zeros([320, self.frameWidth, 3], dtype=np.uint8)
+        self.graph.fill(255)  # fill white
+
+    def grab_cal_data(self):
         # Go grab the computed calibration data
         self.cal_data = readcal(self.frameWidth)
         self.wavelengthData = self.cal_data[0]
@@ -66,84 +80,79 @@ class PySpectrometer:
         self.cal_msg2 = self.cal_data[2]
         self.cal_msg3 = self.cal_data[3]
 
+    def setup_graticule(self):
         # generate the graticule data
         self.graticuleData = generateGraticule(self.wavelengthData)
-        tens = (self.graticuleData[0])
-        fifties = (self.graticuleData[1])
+        self.tens = (self.graticuleData[0])
+        self.fifties = (self.graticuleData[1])
 
-        # blank image for Graph
-        self.graph = np.zeros([320, self.frameWidth, 3], dtype=np.uint8)
-        self.graph.fill(255)  # fill white
+    def setup(self):
+        self.cap, self.c_fps = init_video(self.display_fullscreen, self.video_window_title, self.frameWidth,
+                                          self.frameHeight, self.fps, self.dev)
+        cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
+        self.grab_cal_data()
+        self.setup_graticule()
 
     def handle_keypress(self):
         self.keyPress = cv2.waitKey(1)
-        match self.keyPress:
-            case ord('q'):
-                exit()
-            case ord('h'):
-                if not self.hold_peaks:
-                    self.hold_peaks = True
-                elif self.hold_peaks:
-                    self.hold_peaks = False
-            case ord("s"):
-                # package up the data!
-                self.graph_data = [self.wavelengthData, self.intensity]
-                self.save_data = [self.spectrum_vertical, self.graph_data]
-                self.saveMsg = snapshot(self.save_data)
-            case ord("c"):
-                self.cal_complete = writecal(self.clickArray)
-                if self.cal_complete:
-                    # overwrite wavelength data
-                    # Go grab the computed calibration data
-                    self.cal_data = readcal(self.frameWidth)
-                    self.wavelengthData = self.cal_data[0]
-                    self.cal_msg1 = self.cal_data[1]
-                    self.cal_msg2 = self.cal_data[2]
-                    self.cal_msg3 = self.cal_data[3]
-                    # overwrite graticule data
-                    self.graticuleData = generateGraticule(self.wavelengthData)
-                    tens = (self.graticuleData[0])
-                    fifties = (self.graticuleData[1])
-            case ord("x"):
-                self.clickArray = []
-            case ord("m"):
-                self.recPixels = False  # turn off rec_pixels!
-                if not self.measure:
-                    self.measure = True
-                elif self.measure:
-                    self.measure = False
-            case ord("p"):
-                self.measure = False  # turn off measure!
-                if not self.recPixels:
-                    self.recPixels = True
-                elif self.recPixels:
-                    self.recPixels = False
-            case ord("o"):  # sav up
-                self.sav_poly += 1
-                if self.sav_poly >= 15:
-                    self.sav_poly = 15
-            case ord("l"):  # sav down
-                self.sav_poly -= 1
-                if self.sav_poly <= 0:
-                    self.sav_poly = 0
-            case ord("i"):  # Peak width up
-                self.min_dist += 1
-                if self.min_dist >= 100:
-                    self.min_dist = 100
-            case ord("k"):  # Peak Width down
-                self.min_dist -= 1
-                if self.min_dist <= 0:
-                    self.min_dist = 0
-            case ord("u"):  # label thresh up
-                self.thresh += 1
-                if self.thresh >= 100:
-                    self.thresh = 100
-            case ord("j"):  # label thresh down
-                self.thresh -= 1
-                if self.thresh <= 0:
-                    self.thresh = 0
-            case _:
-                exit()
+        if self.keyPress == ord('q'):
+            exit()
+        elif self.keyPress == ord('h'):
+            if not self.hold_peaks:
+                self.hold_peaks = True
+            elif self.hold_peaks:
+                self.hold_peaks = False
+        elif self.keyPress == ord("s"):
+            # package up the data!
+            self.graph_data = [self.wavelengthData, self.intensity]
+            self.save_data = [self.spectrum_vertical, self.graph_data]
+            self.saveMsg = snapshot(self.save_data)
+        elif self.keyPress == ord("c"):
+            self.cal_complete = writecal(self.clickArray)
+            if self.cal_complete:
+                # overwrite wavelength data
+                # Go grab the computed calibration data
+                self.grab_cal_data()
+                # overwrite graticule data
+                self.setup_graticule()
+        elif self.keyPress == ord("x"):
+            self.clickArray = []
+        elif self.keyPress == ord("m"):
+            self.recPixels = False  # turn off rec_pixels!
+            if not self.measure:
+                self.measure = True
+            elif self.measure:
+                self.measure = False
+        elif self.keyPress == ord("p"):
+            self.measure = False  # turn off measure!
+            if not self.recPixels:
+                self.recPixels = True
+            elif self.recPixels:
+                self.recPixels = False
+        elif self.keyPress == ord("o"):  # sav up
+            self.sav_poly += 1
+            if self.sav_poly >= 15:
+                self.sav_poly = 15
+        elif self.keyPress == ord("l"):  # sav down
+            self.sav_poly -= 1
+            if self.sav_poly <= 0:
+                self.sav_poly = 0
+        elif self.keyPress == ord("i"):  # Peak width up
+            self.min_dist += 1
+            if self.min_dist >= 100:
+                self.min_dist = 100
+        elif self.keyPress == ord("k"):  # Peak Width down
+            self.min_dist -= 1
+            if self.min_dist <= 0:
+                self.min_dist = 0
+        elif self.keyPress == ord("u"):  # label thresh up
+            self.thresh += 1
+            if self.thresh >= 100:
+                self.thresh = 100
+        elif self.keyPress == ord("j"):  # label thresh down
+            self.thresh -= 1
+            if self.thresh <= 0:
+                self.thresh = 0
 
     def handle_mouse(self, event, x, y, flags, param):
         mouseYOffset = 160
@@ -175,7 +184,6 @@ class PySpectrometer:
                     cv2.line(self.graph, (0, i), (self.frameWidth, i), (100, 100, 100), 1)
 
     def process_plot_intensity(self, halfway):
-        # Now process the intensity data and display it
         # intensity = []
         for i in range(self.cols):
             # data = bwimage[halfway,i] #pull the pixel data from the halfway mark
@@ -188,7 +196,7 @@ class PySpectrometer:
             self.data = np.uint8(self.data)
 
             if self.hold_peaks:
-                if self.data > intensity[i]:
+                if self.data > self.intensity[i]:
                     self.intensity[i] = self.data
             else:
                 self.intensity[i] = self.data
@@ -205,7 +213,7 @@ class PySpectrometer:
 
         # now draw the intensity data....
         index = 0
-        for i in intensity:
+        for i in self.intensity:
             # derive the color from the  wavelengthData array
             rgb = wavelength_to_rgb(round(self.wavelengthData[index]))
             r, g, b = rgb[0], rgb[1], rgb[2]
@@ -215,10 +223,9 @@ class PySpectrometer:
             index += 1
 
     def find_label_peaks(self):
-        # find peaks and label them
         text_offset = 12
         self.thresh = int(self.thresh)  # make sure the data is int.
-        indexes = peakIndexes(intensity, thres=self.thresh / max(intensity), min_dist=self.min_dist)
+        indexes = peakIndexes(self.intensity, thres=self.thresh / max(self.intensity), min_dist=self.min_dist)
         # print(indexes)
         for i in indexes:
             height = self.intensity[i]
@@ -235,30 +242,29 @@ class PySpectrometer:
             cv2.line(self.graph, (i, height), (i, height + 10), (0, 0, 0), 1)
 
     def display(self, messages):
-        # stack the images and display the spectrum
-        spectrum_vertical = np.vstack((messages, self.cropped, self.graph))
+        self.spectrum_vertical = np.vstack((messages, self.cropped, self.graph))
         # dividing lines...
-        cv2.line(spectrum_vertical, (0, 80), (self.frameWidth, 80), (255, 255, 255), 1)
-        cv2.line(spectrum_vertical, (0, 160), (self.frameWidth, 160), (255, 255, 255), 1)
+        cv2.line(self.spectrum_vertical, (0, 80), (self.frameWidth, 80), (255, 255, 255), 1)
+        cv2.line(self.spectrum_vertical, (0, 160), (self.frameWidth, 160), (255, 255, 255), 1)
         # print the messages
-        cv2.putText(spectrum_vertical, self.cal_msg1, (490, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, self.cal_msg3, (490, 33), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, "Framerate: " + str(self.c_fps), (490, 51), self.font, 0.4, (0, 255, 255), 1,
+        cv2.putText(self.spectrum_vertical, self.cal_msg1, (490, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(self.spectrum_vertical, self.cal_msg3, (490, 33), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(self.spectrum_vertical, "Framerate: " + str(self.c_fps), (490, 51), self.font, 0.4, (0, 255, 255),
+                    1,
                     cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, self.saveMsg, (490, 69), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(self.spectrum_vertical, self.saveMsg, (490, 69), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
         # Second column
-        cv2.putText(spectrum_vertical, self.hold_msg, (640, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, "Savgol Filter: " + str(self.sav_poly), (640, 33), self.font, 0.4,
+        cv2.putText(self.spectrum_vertical, self.hold_msg, (640, 15), self.font, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(self.spectrum_vertical, "Savgol Filter: " + str(self.sav_poly), (640, 33), self.font, 0.4,
                     (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, "Label Peak Width: " + str(self.min_dist), (640, 51), self.font, 0.4,
+        cv2.putText(self.spectrum_vertical, "Label Peak Width: " + str(self.min_dist), (640, 51), self.font, 0.4,
                     (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(spectrum_vertical, "Label Threshold: " + str(self.thresh), (640, 69), self.font, 0.4,
+        cv2.putText(self.spectrum_vertical, "Label Threshold: " + str(self.thresh), (640, 69), self.font, 0.4,
                     (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.imshow(self.video_window_title, spectrum_vertical)
-
-
+        cv2.imshow(self.video_window_title, self.spectrum_vertical)
 
     def run(self):
+        self.setup()
         while self.cap.isOpened():
             # Capture frame-by-frame
             self.ret, self.frame = self.cap.read()
@@ -288,6 +294,19 @@ class PySpectrometer:
                 img = cv2.imdecode(np_data, 3)
                 messages = img
 
+                # blank image for Graph
+                self.graph = np.zeros([320, self.frameWidth, 3], dtype=np.uint8)
+                self.graph.fill(255)  # fill white
+
+                # Display a graticule calibrated with cal data
+                self.display_graticule_line()
+
+                # Now process the intensity data and display it
+                self.process_plot_intensity(halfway=halfway)
+
+                # find peaks and label them
+                self.find_label_peaks()
+
                 if self.measure:
                     # show the cursor!
                     cv2.line(self.graph, (self.cursorX, self.cursorY - 140),
@@ -308,19 +327,38 @@ class PySpectrometer:
                                 0.4, (0, 0, 0), 1, cv2.LINE_AA)
                 else:
                     # also make sure the click array stays empty
-                    clickArray = []
+                    self.clickArray = []
 
-                if clickArray:
-                    for data in clickArray:
-                        mouseX = self.data[0]
-                        mouseY = self.data[1]
-                        cv2.circle(self.graph, (mouseX, mouseY), 5, (0, 0, 0), -1)
+                if self.clickArray:
+                    for data in self.clickArray:
+                        self.mouseX = data[0]
+                        self.mouseY = data[1]
+                        cv2.circle(self.graph, (self.mouseX, self.mouseY), 5, (0, 0, 0), -1)
                         # we can display text :-) so we can work out wavelength from x-pos and display it ultimately
-                        cv2.putText(self.graph, str(mouseX), (mouseX + 5, mouseY), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                        cv2.putText(self.graph, str(self.mouseX), (self.mouseX + 5, self.mouseY),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                                     (0, 0, 0))
 
+                # stack the images and display the spectrum
+                self.display(messages=messages)
+
+                self.handle_keypress()
+
+            else:
+                break
+        self.quit_program()
 
     def quit_program(self):
         # Everything done, release the vid
         self.cap.release()
         cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    serial_connection = connect_serial(serialPort="/dev/ttyACM1")
+    realTimePlot = AnimationPlot(serial_connection=serial_connection)
+    #realTimePlot.run()
+    spec = PySpectrometer(device_id=2, fps=30, display_fullscreen=False)
+    spec.run()
+
+
