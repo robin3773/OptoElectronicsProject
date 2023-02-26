@@ -6,11 +6,53 @@ import warnings
 import numpy as np
 import random
 from func_utils import connect_serial
-from multiprocessing import Process
+from multiprocessing import Process, Value, Queue
+import socket
+import threading
+import multiprocessing as mp
+from itertools import islice
+
+
+
+def start_socket_server(server_address, server_port, queue):
+    # Create a socket object
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #server_socket.setblocking(0)
+
+    try:
+        server_socket.bind((server_address, server_port))
+    except OSError:
+        server_socket.close()
+        exit()
+
+    # Listen for incoming connections
+    server_socket.listen()
+
+    # Start the server loop
+    while True:
+        # Wait for a client connection
+        client_socket, client_address = server_socket.accept()
+
+        # Print a message indicating that a client has connected
+        print(f'Client connected from {client_address}')
+
+        # Receive and process data from the client
+        while True:
+            socket_data = client_socket.recv(1024)
+            if not socket_data:
+                break
+            # Process the received data here
+            #print(f'Received data: {socket_data.decode()}')
+            queue.put(float(socket_data.decode()))
+
+        # Close the client socket when done
+        client_socket.close()
+
+
 
 
 class AnimationPlot:
-    def __init__(self, serial_connection):
+    def __init__(self, serial_connection, queue):
         self.led_current = []
         self.led_voltage = []
         self.luminous_intensity = []
@@ -30,20 +72,29 @@ class AnimationPlot:
                 V1, V2, I = received_data
                 self.led_current.append(I)
                 self.led_voltage.append(V2)
-                self.luminous_intensity.append(intensity)
-                #print(received_data)
+                #print("I = ", self.led_current)
+               # print(received_data, self.luminous_intensity)
         except:
             warnings.warn("Corrupted Data Received")
             pass
 
         self.led_current = self.led_current[-50:]
         self.led_voltage = self.led_voltage[-50:]
-
+        
+    
+        
     def animate(self, i):
         self.extract_serial_data()
+        temp = queue.get()
+        
+        self.luminous_intensity.append(temp)
         self.get_plot_format()
+        self.luminous_intensity = list(islice(reversed(self.luminous_intensity), 0, len(self.led_current)))
+        self.luminous_intensity.reverse()
+
+        print(self.led_current[-1:], temp)
         self.ax1.plot(self.led_voltage, self.led_current, color='m', linewidth=2)
-        # self.ax2.plot(self.led_current, self.luminous_intensity, color = 'c')
+        self.ax2.plot(self.led_current, self.luminous_intensity, color = 'c')
 
     def get_plot_format(self):
         self.ax1.clear()
@@ -55,34 +106,32 @@ class AnimationPlot:
         self.ax1.set_xlabel("Voltage (V)")
         self.ax1.grid(color='g', linestyle='--', linewidth=0.5)
 
-        self.ax2.set_ylim([0, 1])
-        self.ax2.set_xlim([-0.5, 1])
+        self.ax2.set_xlim([0, 1])
+        self.ax2.autoscale_view()
         self.ax2.set_title("LI Curve")
         self.ax2.set_xlabel("I (mA)")
         self.ax2.set_ylabel("Power")
         self.ax2.grid(color='g', linestyle='--', linewidth=0.5)
 
-    def print_value(self):
-        print("V = ", self.led_voltage)
-        print("I = ", self.led_current)
 
     def run(self):
-        ani = animation.FuncAnimation(self.fig, self.animate, frames=10000, interval=10, blit=True)
-        plt.show(block = False)
-
-
-def main_program():
-    ser = connect_serial()
-    r = AnimationPlot(ser)
-    r.run()
+        ani = animation.FuncAnimation(self.fig, self.animate, frames=165, interval=1, blit=True)
+        plt.show()
 
 
 if __name__ == "__main__":
-    intensity = 1
-    serialConnection = connect_serial()
-    realTimePlot = AnimationPlot(serialConnection)
+    try:
+        queue = Queue()
+        time.sleep(1)
+        t1 = Process(target=start_socket_server, args=('localhost', 12345, queue, ))
+        t1.start()
 
-    p = Process(target=realTimePlot.run())
-    p.start()
-    main_program()
-    p.join()
+        serialConnection = connect_serial(serialPort='/dev/ttyACM0')
+        realTimePlot = AnimationPlot(serialConnection, queue=queue)
+        realTimePlot.run()
+        t1.terminate()
+        t1.join()
+    except KeyboardInterrupt: 
+        print("Inside Except")
+        for child in mp.active_children():
+            child.kill()

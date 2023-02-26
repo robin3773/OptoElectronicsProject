@@ -13,5 +13,5 @@ void loop() {
   Serial.print(val2);
   Serial.print(" "); 
   Serial.println(val3);
-  delay(100);
+  delay(1);
 }

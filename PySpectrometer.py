@@ -1,6 +1,7 @@
 import cv2
 import time
 import base64
+from scipy import integrate
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +12,19 @@ from IV import *
 import threading
 from multiprocessing import Process
 from IV import AnimationPlot
+import socket 
+
+import socket
+import time
+
+def create_socket(server_address = 'localhost', server_port=12345):
+    # Create a socket object
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Connect to the server
+    client_socket.connect((server_address, server_port))
+
+    return client_socket
+
 
 class PySpectrometer:
     def __init__(self, device_id, fps, display_fullscreen):
@@ -87,6 +101,7 @@ class PySpectrometer:
         self.fifties = (self.graticuleData[1])
 
     def setup(self):
+        self.sock_obj = create_socket()
         self.cap, self.c_fps = init_video(self.display_fullscreen, self.video_window_title, self.frameWidth,
                                           self.frameHeight, self.fps, self.dev)
         cv2.setMouseCallback(self.video_window_title, self.handle_mouse)
@@ -96,7 +111,7 @@ class PySpectrometer:
     def handle_keypress(self):
         self.keyPress = cv2.waitKey(1)
         if self.keyPress == ord('q'):
-            exit()
+            self.quit_program()
         elif self.keyPress == ord('h'):
             if not self.hold_peaks:
                 self.hold_peaks = True
@@ -263,6 +278,15 @@ class PySpectrometer:
                     (0, 255, 255), 1, cv2.LINE_AA)
         cv2.imshow(self.video_window_title, self.spectrum_vertical)
 
+        data = str(integrate.simpson(np.array(self.intensity)/256, np.array(self.wavelengthData)))
+
+        try:
+            print("Sending L  = ", data)
+            self.sock_obj.send(data.encode())
+        except: 
+            pass
+        
+
     def run(self):
         self.setup()
         while self.cap.isOpened():
@@ -348,17 +372,16 @@ class PySpectrometer:
                 break
         self.quit_program()
 
+        return self.intensity, self.wavelengthData
+
     def quit_program(self):
         # Everything done, release the vid
         self.cap.release()
         cv2.destroyAllWindows()
+        self.sock_obj.close()
 
 
 if __name__ == '__main__':
-    serial_connection = connect_serial(serialPort="/dev/ttyACM1")
-    realTimePlot = AnimationPlot(serial_connection=serial_connection)
-    #realTimePlot.run()
-    spec = PySpectrometer(device_id=2, fps=30, display_fullscreen=False)
-    spec.run()
-
+    spec = PySpectrometer(device_id=0, fps=30, display_fullscreen=False)
+    intensity, wavelength = spec.run()
 
